@@ -1,0 +1,37 @@
+{% extends 'base.html' %}
+{% block content %}
+<!-- TODO: Change from table to cards -->
+<div class="container">
+    <div class="row">
+        <div class="col-">
+        
+        <table class="table">
+        <thead>
+            <tr>
+            {% for column in all_cafes[0] %}
+                <th scope="col">{{ column.title() }}</th>
+            {% endfor %}
+            </tr>
+        </thead>
+        {% for cafe in all_cafes %}
+        <tr>
+            {% for (key, value) in cafe.items() %}
+            <td>
+                {% if key == 'map_url' or key == 'img_url'%}
+                    <a href="{{ value }}">Link</a>
+                {% elif value == 'True': %}
+                    <span class="symbol">✓</span>
+                {% elif value == 'False': %}
+                    <span class="symbol">-</span>
+                {% else %}
+                    {{ value }}
+                {% endif %}
+            </td>   
+            {% endfor %}
+        </tr>
+        {% endfor %}
+        </table>
+        </div>  
+    </div>  
+</div>
+{% endblock %}
