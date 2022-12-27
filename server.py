@@ -1,13 +1,14 @@
-from functools import wraps
 from flask import Flask, request, redirect, url_for, render_template, jsonify
+from flask_bootstrap import Bootstrap
+from flask_wtf import FlaskForm
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.exc import UnmappedInstanceError
-from flask_wtf import FlaskForm
 from wtforms import StringField, BooleanField, FloatField, SubmitField, SelectField
 from wtforms.validators import DataRequired
+from functools import wraps
 # TODO: flask_wtf.Recaptcha ?
-from flask_bootstrap import Bootstrap
+
 
 
 app = Flask(__name__)
@@ -176,7 +177,7 @@ def authed_user(func):
 def api_all_cafes():
     all_cafes_query = db.session.query(Cafes).all()
     all_cafes = [cafe.to_dict() for cafe in all_cafes_query]
-    return jsonify(all_cafes)
+    return jsonify(cafes=all_cafes)
 
 
 @app.route("/cafes/add", methods=["POST"])
@@ -198,43 +199,36 @@ def api_add_cafe():
     try:
         db.session.add(new_cafe)
         db.session.commit()
-        response = {"success": "Successfully added the new cafe"}
+        response = {"success": f"Successfully added {new_cafe.name}"}
     except IntegrityError:
         db.session.rollback()
         response = {"error": "There was an error adding new cafe"}
     return jsonify(response=response)
 
 
-@app.route("/cafes/update", methods=["PUT"])
+@app.route("/cafes/update", methods=["GET", "PATCH"])
 @authed_user
 def update_cafe():
-    # TODO: update cafe values if correct params in api request
-    #  without all values being null, checking column datatype
-    #   or just write it out the long way
     params = request.form.to_dict()
-    print(params)
-
     valid_columns = {}
     for column in Cafes.__table__.columns:
         valid_columns[str(column.name)] = str(column.type)
-
     attributes_to_update = {k: v for k, v in params.items() if k in valid_columns.keys()}
 
-    # cafe_to_update.key doesnae work
-    # for key, value in attributes_to_update.items():
-    #     if key == 'id':
-    #         pass
-    #     if valid_columns[key] == 'BOOLEAN':
-    #         cafe_to_update.key = to_bool(value)
-    #     elif valid_columns[key] == 'INTEGER':
-    #         cafe_to_update.key = int(value)
-    #     else:
-    #         cafe_to_update.key = value
-    # cafe_to_update.verified = True
-    # db.session.commit()
     try:
         cafe_to_update = db.session.get(Cafes, params['id'])
+        for key, value in attributes_to_update.items():
+            if value == "":
+                raise ValueError
+            elif valid_columns[key] == "BOOLEAN":
+                setattr(cafe_to_update, key, to_bool(value))
+            else:
+                setattr(cafe_to_update, key, value)
+        cafe_to_update.verified = True
+        db.session.commit()
         return jsonify(success={"Success": f"Successfully updated {cafe_to_update.name}"}), 200
+    except ValueError:
+        return jsonify(error={"Error": "Empty value submitted"}), 400
     except UnmappedInstanceError:
         return jsonify(error={"Not found": "Sorry a cafe with that id was not found in the database"}), 404
 
@@ -243,10 +237,11 @@ def update_cafe():
 @authed_user
 def api_delete():
     params = request.form.to_dict()
-    print(params)
     try:
         cafe_to_delete = db.session.get(Cafes, params['id'])
-        return jsonify(success={"Success": f"Successfully updated {cafe_to_delete.name}"}), 200
+        db.session.delete(cafe_to_delete)
+        db.session.commit()
+        return jsonify(success={"Success": f"Successfully deleted {cafe_to_delete.name}"}), 200
     except UnmappedInstanceError:
         return jsonify(error={"Not found": "Sorry a cafe with that id was not found in the database"}), 404
 
