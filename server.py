@@ -2,21 +2,47 @@ from flask import Flask, request, redirect, url_for, render_template, jsonify
 from flask_bootstrap import Bootstrap
 from flask_wtf import FlaskForm
 from flask_sqlalchemy import SQLAlchemy
+from flask_login import *
+from werkzeug.security import check_password_hash, generate_password_hash
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.exc import UnmappedInstanceError
-from wtforms import StringField, BooleanField, FloatField, SubmitField, SelectField
-from wtforms.validators import DataRequired
+from wtforms import StringField, BooleanField, FloatField, SubmitField, SelectField, PasswordField
+from wtforms.validators import DataRequired, Email
 from functools import wraps
+
 # TODO: flask_wtf.Recaptcha ?
-
-
+# TODO: generate api key for user when they register
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "Banana"
 app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///cafes.db"
 db = SQLAlchemy(app)
 db.init_app(app)
+login_manager = LoginManager()
+login_manager.init_app(app)
 Bootstrap(app)
+
+
+class User(UserMixin, db.Model):
+    __tablename__ = "user"
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(100), unique=True)
+    password = db.Column(db.String(100))
+    name = db.Column(db.String(100))
+
+
+class RegisterForm(FlaskForm):
+    name = StringField("Name", validators=[DataRequired()])
+    email = StringField("Email", validators=[DataRequired(), Email()])
+    password = PasswordField("Password", validators=[DataRequired()])
+    confirm = PasswordField("Confirm Password", validators=[DataRequired()])
+    submit = SubmitField("Submit")
+
+
+class LoginForm(FlaskForm):
+    email = StringField("Email", validators=[DataRequired(), Email()])
+    password = PasswordField("Password", validators=[DataRequired()])
+    submit = SubmitField("Submit")
 
 
 class AddCafeForm(FlaskForm):
@@ -57,8 +83,11 @@ class Cafes(db.Model):
         """ Returns the cafe as a dictionary, with all the values as strings """
         return {column.name: str(getattr(self, column.name)) for column in self.__table__.columns}
 
+# with app.app_context():
+#     db.create_all()
 
 def to_bool(value):
+    """ Returns a Boolean value if """
     value = value.lower()
     valid = {'true': True, 't': True, '1': True, 'yes': True,
              'false': False, 'f': False, '0': False, 'no': False, }
@@ -72,22 +101,66 @@ def to_choice(value):
     else:
         return "No"
 
-# with app.app_context():
-#     db.create_all()
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(user_id)
 
 
 # Website Version, possible to combine with api code??
 @app.route("/")
 def home():
-    # TODO: Add, Edit, Delete buttons on side when user logged in
     all_cafes_query = db.session.query(Cafes).all()
     all_cafes = [cafe.to_dict() for cafe in all_cafes_query]
     return render_template("index.html", all_cafes=all_cafes)
 
 
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    form = RegisterForm()
+    if form.validate_on_submit() and form.password.data == form.confirm.data:
+        new_user = User()
+        new_user.email = form.email.data
+        if User.query.filter_by(email=new_user.email).first():
+            # TODO: Flash
+            return redirect(url_for('login'))
+        new_user.name = form.name.data
+        password = form.password.data
+
+        salted_and_hashed_password = generate_password_hash(password=password,
+                                                            method='pbkdf2:sha256',
+                                                            salt_length=8, )
+        new_user.password = salted_and_hashed_password
+        db.session.add(new_user)
+        db.session.commit()
+        login_user(new_user)
+        return redirect(url_for('home'))
+    return render_template('register.html', form=form)
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    form = LoginForm()
+    if form.validate_on_submit():
+        user = User.query.filter_by(email=form.email.data).first()
+        if check_password_hash(user.password, form.password.data):
+            login_user(user)
+            return redirect(url_for('home'))
+        else:
+            # TODO: Flash incorrect credentials
+            pass
+    return render_template('register.html', form=form)
+
+
+@app.route("/logout")
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for('home'))
+
+
 @app.route("/add", methods=["GET", "POST"])
 def add_cafe():
-    # TODO: Add website and API functionality
     form = AddCafeForm()
     if form.validate_on_submit():
         new_cafe = Cafes(
@@ -104,13 +177,13 @@ def add_cafe():
         )
         db.session.add(new_cafe)
         db.session.commit()
-        print("done")
         return redirect(url_for("home"))
 
     return render_template("add.html", form=form)
 
 
 @app.route("/edit/<int:cafe_id>", methods=["GET", "POST"])
+@login_required
 def edit_cafe(cafe_id):
     cafe_to_edit = db.session.get(Cafes, cafe_id)
     editform = AddCafeForm(
@@ -143,6 +216,7 @@ def edit_cafe(cafe_id):
 
 
 @app.route("/delete/<int:cafe_id>", methods=["GET", "POST", "DELETE"])
+@login_required
 def delete_cafe(cafe_id):
     form = DeleteCafeForm()
     cafe_to_delete = db.session.get(Cafes, cafe_id)
@@ -158,6 +232,7 @@ def delete_cafe(cafe_id):
 # API Version
 def authed_user(func):
     # TODO: check for api key in a database rather than a static "SecretKey"
+    #  Check API-key matches Username
     @wraps(func)
     def wrapper(*args, **kwargs):
         token = None
@@ -183,7 +258,6 @@ def api_all_cafes():
 @app.route("/cafes/add", methods=["POST"])
 @authed_user
 def api_add_cafe():
-
     new_cafe = Cafes(
         # name=request.args["name"],
         name=request.form.get("name"),
